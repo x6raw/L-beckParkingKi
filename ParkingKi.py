@@ -1,12 +1,12 @@
 import streamlit as st
+from ultralytics import YOLO
 from PIL import Image
 import numpy as np
-from transformers import pipeline
 import pandas as pd
 import time
 
 # ---------------------------------------------------
-# PAGE CONFIG
+# CONFIG
 # ---------------------------------------------------
 st.set_page_config(
     page_title="Parking AI",
@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------
-# CUSTOM CSS
+# STYLE
 # ---------------------------------------------------
 st.markdown("""
 <style>
@@ -40,16 +40,14 @@ st.markdown("""
 .subtitle {
     text-align:center;
     color:#cbd5e1;
-    font-size:20px;
     margin-bottom:30px;
+    font-size:20px;
 }
 
 .card {
     background: rgba(255,255,255,0.05);
     padding:20px;
     border-radius:20px;
-    backdrop-filter: blur(10px);
-    border:1px solid rgba(255,255,255,0.08);
 }
 
 .metric {
@@ -81,22 +79,16 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="subtitle">KI-gestützte Parkplatz-Erkennung mit Hugging Face</div>',
+    '<div class="subtitle">KI-gestützte Fahrzeug- & Parkplatz-Erkennung</div>',
     unsafe_allow_html=True
 )
 
 # ---------------------------------------------------
-# MODEL LOAD
+# MODEL
 # ---------------------------------------------------
 @st.cache_resource
 def load_model():
-
-    detector = pipeline(
-        "image-classification",
-        model="FGArmy/Parking_AI"
-    )
-
-    return detector
+    return YOLO("yolov8n.pt")
 
 model = load_model()
 
@@ -107,21 +99,27 @@ with st.sidebar:
 
     st.header("⚙️ Einstellungen")
 
-    st.success("✅ Modell geladen")
+    conf = st.slider(
+        "Confidence",
+        0.1,
+        1.0,
+        0.25,
+        0.05
+    )
 
     st.markdown("---")
 
     st.info("""
-    📌 Funktionen:
+    🚗 Erkennt:
     
-    - Parkplatz-Erkennung
-    - KI-Bildanalyse
-    - Smart-City-System
-    - Echtzeit-Auswertung
+    - Autos
+    - Motorräder
+    - Busse
+    - LKWs
     """)
 
 # ---------------------------------------------------
-# FILE UPLOAD
+# UPLOAD
 # ---------------------------------------------------
 uploaded_file = st.file_uploader(
     "📤 Parkplatzbild hochladen",
@@ -135,9 +133,25 @@ if uploaded_file is not None:
 
     image = Image.open(uploaded_file).convert("RGB")
 
+    img_array = np.array(image)
+
+    with st.spinner("🧠 KI analysiert Fahrzeuge..."):
+
+        time.sleep(1)
+
+        results = model.predict(
+            source=img_array,
+            conf=conf,
+            save=False
+        )
+
+    result_img = results[0].plot()
+
+    # ---------------------------------------------------
+    # DISPLAY
+    # ---------------------------------------------------
     col1, col2 = st.columns(2)
 
-    # ORIGINAL
     with col1:
 
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -151,13 +165,6 @@ if uploaded_file is not None:
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # KI ANALYSE
-    with st.spinner("🧠 KI analysiert Parkplätze..."):
-
-        time.sleep(1)
-
-        predictions = model(image)
-
     with col2:
 
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -165,22 +172,47 @@ if uploaded_file is not None:
         st.subheader("🎯 KI-Erkennung")
 
         st.image(
-            image,
+            result_img,
             use_column_width=True
         )
 
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ---------------------------------------------------
-    # RESULTS
+    # ANALYSIS
+    # ---------------------------------------------------
+    boxes = results[0].boxes
+
+    vehicle_classes = [
+        "car",
+        "truck",
+        "bus",
+        "motorcycle"
+    ]
+
+    vehicles = []
+
+    for box in boxes:
+
+        cls_id = int(box.cls[0])
+
+        cls_name = model.names[cls_id]
+
+        conf_score = float(box.conf[0])
+
+        if cls_name in vehicle_classes:
+
+            vehicles.append({
+                "Fahrzeug": cls_name,
+                "Confidence": round(conf_score, 2)
+            })
+
+    total_vehicles = len(vehicles)
+
+    # ---------------------------------------------------
+    # METRICS
     # ---------------------------------------------------
     st.markdown("## 📊 Analyse")
-
-    top_prediction = predictions[0]
-
-    label = top_prediction["label"]
-
-    score = top_prediction["score"]
 
     c1, c2 = st.columns(2)
 
@@ -188,8 +220,8 @@ if uploaded_file is not None:
 
         st.markdown(f"""
         <div class="metric">
-            <div class="metric-number">{label}</div>
-            <div class="metric-label">Erkennung</div>
+            <div class="metric-number">{total_vehicles}</div>
+            <div class="metric-label">Fahrzeuge erkannt</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -197,23 +229,29 @@ if uploaded_file is not None:
 
         st.markdown(f"""
         <div class="metric">
-            <div class="metric-number">{score:.2f}</div>
-            <div class="metric-label">Confidence</div>
+            <div class="metric-number">{conf:.2f}</div>
+            <div class="metric-label">Confidence Threshold</div>
         </div>
         """, unsafe_allow_html=True)
 
     # ---------------------------------------------------
     # TABLE
     # ---------------------------------------------------
-    st.markdown("## 📋 Alle Vorhersagen")
+    st.markdown("## 📋 Erkannte Fahrzeuge")
 
-    df = pd.DataFrame(predictions)
+    if len(vehicles) > 0:
 
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True
-    )
+        df = pd.DataFrame(vehicles)
+
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    else:
+
+        st.warning("Keine Fahrzeuge erkannt.")
 
 # ---------------------------------------------------
 # FOOTER
@@ -221,6 +259,6 @@ if uploaded_file is not None:
 st.markdown("---")
 
 st.markdown(
-    "<center>🚗 Parking AI | Streamlit + Hugging Face</center>",
+    "<center>🚗 Parking AI | YOLOv8 + Streamlit</center>",
     unsafe_allow_html=True
 )
