@@ -1,82 +1,21 @@
 import streamlit as st
 from ultralytics import YOLO
-from PIL import Image
 import numpy as np
-import pandas as pd
+from PIL import Image
+import cv2
 
 # ---------------------------------------------------
-# PAGE CONFIG
+# CONFIG
 # ---------------------------------------------------
-st.set_page_config(
-    page_title="Parking AI",
-    page_icon="🚗",
-    layout="wide"
-)
+st.set_page_config(page_title="Parking AI", layout="wide")
+
+st.title("🅿️ Parking AI – Belegungsanalyse")
 
 # ---------------------------------------------------
-# STYLE (clean & modern)
-# ---------------------------------------------------
-st.markdown("""
-<style>
-
-.stApp {
-    background: linear-gradient(135deg, #0f172a, #111827, #1e293b);
-    color: white;
-}
-
-.title {
-    text-align: center;
-    font-size: 55px;
-    font-weight: bold;
-    color: #38bdf8;
-}
-
-.subtitle {
-    text-align: center;
-    color: #cbd5e1;
-    margin-bottom: 30px;
-    font-size: 18px;
-}
-
-.card {
-    background: rgba(255,255,255,0.05);
-    padding: 20px;
-    border-radius: 20px;
-    border: 1px solid rgba(255,255,255,0.1);
-}
-
-.metric {
-    background: rgba(255,255,255,0.05);
-    padding: 20px;
-    border-radius: 20px;
-    text-align: center;
-}
-
-.metric-number {
-    font-size: 40px;
-    font-weight: bold;
-    color: #38bdf8;
-}
-
-.metric-label {
-    color: #cbd5e1;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# HEADER
-# ---------------------------------------------------
-st.markdown('<div class="title">🚗 Parking AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">YOLOv8 Parkplatz- & Fahrzeugerkennung</div>', unsafe_allow_html=True)
-
-# ---------------------------------------------------
-# MODEL LOAD (STABLE FIX)
+# MODEL
 # ---------------------------------------------------
 @st.cache_resource
 def load_model():
-    # wichtig: immer .pt verwenden
     return YOLO("yolov8n.pt")
 
 model = load_model()
@@ -84,106 +23,108 @@ model = load_model()
 # ---------------------------------------------------
 # SIDEBAR
 # ---------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ Einstellungen")
+conf = st.sidebar.slider("Confidence", 0.1, 1.0, 0.25)
 
-    conf = st.slider("Confidence", 0.1, 1.0, 0.25, 0.05)
-
-    st.markdown("---")
-    st.info("Erkennt: Autos, Busse, LKWs, Motorräder")
+st.sidebar.info("Erkennt: Autos im Bild und berechnet Belegung")
 
 # ---------------------------------------------------
-# UPLOAD
+# IMAGE UPLOAD
 # ---------------------------------------------------
-uploaded_file = st.file_uploader(
-    "📤 Parkplatzbild hochladen",
-    type=["jpg", "jpeg", "png"]
-)
+file = st.file_uploader("📤 Parkplatzbild hochladen", type=["jpg","png","jpeg"])
 
 # ---------------------------------------------------
-# MAIN LOGIC
+# FIXED PARKING SLOTS (WICHTIG!)
 # ---------------------------------------------------
-if uploaded_file is not None:
+# Beispiel: 6 Parkplätze als Rechtecke
+# (x1, y1, x2, y2) – MUSS ggf. an dein Bild angepasst werden
+PARKING_SLOTS = [
+    (50, 200, 200, 400),
+    (220, 200, 370, 400),
+    (390, 200, 540, 400),
+    (560, 200, 710, 400),
+    (730, 200, 880, 400),
+    (900, 200, 1050, 400),
+]
 
-    image = Image.open(uploaded_file).convert("RGB")
-    img_array = np.array(image)
+# ---------------------------------------------------
+# MAIN
+# ---------------------------------------------------
+if file:
 
-    # Prediction
-    results = model.predict(
-        source=img_array,
-        conf=conf,
-        save=False
-    )
+    image = Image.open(file).convert("RGB")
+    img = np.array(image)
 
-    result_img = results[0].plot()
+    results = model.predict(img, conf=conf)[0]
 
-    # Layout
+    boxes = results.boxes
+
+    occupied = [False] * len(PARKING_SLOTS)
+
+    # ---------------------------------------------------
+    # CHECK CARS
+    # ---------------------------------------------------
+    for box in boxes:
+
+        cls = int(box.cls[0])
+        name = model.names[cls]
+
+        if name != "car":
+            continue
+
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+        car_center = ((x1 + x2)//2, (y1 + y2)//2)
+
+        # check in which slot car is
+        for i, (sx1, sy1, sx2, sy2) in enumerate(PARKING_SLOTS):
+
+            if sx1 < car_center[0] < sx2 and sy1 < car_center[1] < sy2:
+                occupied[i] = True
+
+    # ---------------------------------------------------
+    # DRAW RESULT IMAGE
+    # ---------------------------------------------------
+    img_cv = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    for i, (x1, y1, x2, y2) in enumerate(PARKING_SLOTS):
+
+        color = (0, 0, 255) if occupied[i] else (0, 255, 0)
+
+        cv2.rectangle(img_cv, (x1, y1), (x2, y2), color, 2)
+
+        label = "BELEGT" if occupied[i] else "FREI"
+
+        cv2.putText(
+            img_cv,
+            label,
+            (x1, y1 - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            color,
+            2
+        )
+
+    # ---------------------------------------------------
+    # OUTPUT
+    # ---------------------------------------------------
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("🖼️ Original")
-        st.image(image, use_column_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.image(image, caption="Original")
 
     with col2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("🎯 Erkennung")
-        st.image(result_img, use_column_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.image(img_cv, caption="Parking Analyse")
 
     # ---------------------------------------------------
     # STATS
     # ---------------------------------------------------
-    boxes = results[0].boxes
+    total = len(PARKING_SLOTS)
+    used = sum(occupied)
+    free = total - used
 
-    vehicles = []
-    vehicle_names = ["car", "truck", "bus", "motorcycle"]
+    st.markdown("## 📊 Parkplatz Status")
 
-    for box in boxes:
-        cls_id = int(box.cls[0])
-        name = model.names[cls_id]
-        conf_score = float(box.conf[0])
-
-        if name in vehicle_names:
-            vehicles.append({
-                "Objekt": name,
-                "Confidence": round(conf_score, 2)
-            })
-
-    st.markdown("## 📊 Analyse")
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-        st.markdown(f"""
-        <div class="metric">
-            <div class="metric-number">{len(vehicles)}</div>
-            <div class="metric-label">Fahrzeuge erkannt</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with c2:
-        st.markdown(f"""
-        <div class="metric">
-            <div class="metric-number">{conf:.2f}</div>
-            <div class="metric-label">Confidence</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # ---------------------------------------------------
-    # TABLE
-    # ---------------------------------------------------
-    st.markdown("## 📋 Details")
-
-    if vehicles:
-        df = pd.DataFrame(vehicles)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.warning("Keine Fahrzeuge erkannt.")
-
-# ---------------------------------------------------
-# FOOTER
-# ---------------------------------------------------
-st.markdown("---")
-st.markdown("<center>🚗 Parking AI | YOLOv8 + Streamlit</center>", unsafe_allow_html=True)
+    st.metric("Gesamt", total)
+    st.metric("Belegt", used)
+    st.metric("Frei", free)
+    st.metric("Auslastung", f"{used/total*100:.1f}%")
