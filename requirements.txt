@@ -1,7 +1,7 @@
 streamlit==1.35.0
 ultralytics==8.2.0
-torch
-torchvision
+torch==2.2.2
+torchvision==0.17.2
 numpy
 pandas
 pillow
